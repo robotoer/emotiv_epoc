@@ -7,6 +7,7 @@ import roslib
 import rospy
 from std_msgs.msg import UInt32
 
+# TODO: Convert this to use opencv2 instead.
 # Other imports.
 import pygame
 import pygame.font
