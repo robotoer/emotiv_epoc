@@ -72,8 +72,8 @@ def read_bag(bag_location):
 
 def draw_specgram(signal, name):
     # Use specgram.
-    pylab.specgram(signal, NFFT=1024, Fs=128, noverlap=100)
-    pylab.title(name)
+    pylab.specgram(signal, NFFT=1024, Fs=128)
+    # pylab.title(name)
 
 
 def draw_scalogram(signal, name):
@@ -142,29 +142,41 @@ if __name__ == '__main__':
     if args.target_type == 'bag':
         # Read the bag file.
         buffers = read_bag(args.target)
+        print "Read buffers."
 
         # Only display the signal channels.
         signals = [topic for topic in buffers if 'signal' in topic]
+        print "Read signals."
 
         # Draw 3d plots.
-        if args.transform_type == '3d' or args.transform_type == '3d_contour':
+        if args.display_type == '3d' or args.display_type == '3d_contour':
+            print "Drawing 3D plot."
             for topic in signals:
-                draw_3D_scalogram(buffers[topic], topic, args.transform_type == '3d_contour')
+                draw_3D_scalogram(buffers[topic], topic, args.display_type == '3d_contour')
 
         # Draw 2d plots.
-        elif args.transform_type == 'heatmap':
-            subplot_base = len(signals) * 100 + 10
+        elif args.display_type == 'heatmap':
+            print "Drawing heatmap."
             pylab.figure('EEG scalograms')
             pylab.title('EEG scalograms')
-            for topic, i in enumerate(signals):
-                pylab.subplot(subplot_base + i)
-                draw_scalogram(buffers[topic], topic)
+
+            if args.transform_type == 'fft':
+                for i, topic in enumerate(signals):
+                    pylab.subplot(1, len(signals), i)
+                    draw_specgram(buffers[topic], topic)
+            elif args.transform_type == 'morlet':
+                for i, topic in enumerate(signals):
+                    pylab.subplot(len(signals), 1, i)
+                    draw_scalogram(buffers[topic], topic)
+            else:
+                print "Unsupported 'transform-type': %s" % args.transform_type
 
         # Display everything.
         pyplot.show()
 
     elif args.target_type == 'ros_topic':
         # Open up listeners
+        print "Listening to ros topics."
         pass
     else:
         print "Unrecognized target-type: %s" % args.target_type
