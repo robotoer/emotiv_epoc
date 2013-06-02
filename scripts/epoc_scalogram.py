@@ -9,27 +9,38 @@
 # Usage:
 #   python epoc_scalogram.py /path/to/bag/file.bag
 
+from __future__ import print_function
+
+import matplotlib
+matplotlib.use('GTKAgg')
+
 import argparse
+import gobject
 import numpy
 import rosbag
 import scipy.misc
 import subprocess
+import threading
 import yaml
 
 from Wavelets import Morlet
+from matplotlib import animation
 from matplotlib import cm
 from matplotlib import pylab
 from matplotlib import pyplot
 from mpl_toolkits.mplot3d import axes3d
 
+import rospy
+from std_msgs.msg import UInt32
+
 
 def read_bag(bag_location):
     # Open a bag file.
     bag = rosbag.Bag(bag_location)
-    print "Bag information:"
-    print bag
-    print
-    print
+    print("Bag information:")
+    print(bag)
+    print()
+    print()
 
     # Get information about the .bag file.
     bag_info_command = ['rosbag', 'info', '--yaml', bag_location]
@@ -64,7 +75,7 @@ def read_bag(bag_location):
         buffer_sizes[topic] += 1
 
     # Cleanup.
-    print "Done! Read: %d messages" % sum(buffer_sizes.values())
+    print("Done! Read: %d messages" % sum(buffer_sizes.values()))
     bag.close()
 
     return buffers
@@ -72,13 +83,13 @@ def read_bag(bag_location):
 
 def draw_specgram(signal, name):
     # Use specgram.
-    pylab.specgram(signal, NFFT=1024, Fs=128)
+    pylab.specgram(signal, NFFT=256, Fs=128)
     # pylab.title(name)
 
 
 def draw_scalogram(signal, name):
     # Perform a wavelet transform on the input signal.
-    print "Transforming '%s' using a Morlet wavelet..." % name
+    print("Transforming '%s' using a Morlet wavelet..." % name)
     transformed = Morlet(
         signal,
         largestscale=4,
@@ -95,7 +106,7 @@ def draw_scalogram(signal, name):
 
 def draw_3D_scalogram(signal, name, draw_contours=False):
     # Perform a wavelet transform on the input signal.
-    print "Transforming '%s' using a Morlet wavelet..." % name
+    print("Transforming '%s' using a Morlet wavelet..." % name)
     transformed = Morlet(
         signal,
         largestscale=4,
@@ -129,6 +140,94 @@ def draw_3D_scalogram(signal, name, draw_contours=False):
     axis.set_zlabel('amplitude')
 
 
+class EPOCWaterfallGrapher(threading.Thread):
+    """
+    Listens to a ROS channel and displays the data as a spectrogram.
+
+    @param figure to draw to.
+    @param channel to listen to.
+    @param window_size to display.
+    @param channel_position of the graph on the screen.
+    @param channel_count is the number of channels being displayed.
+    """
+    def __init__(self, figure, channel, window_size, channel_position, channel_count):
+        super(EPOCWaterfallGrapher, self).__init__()
+        self.channel = channel
+
+        # Create an empty buffer.
+        self.signal_window = numpy.zeros(window_size)
+        self.signal_lock = threading.RLock()
+
+        # Add a subplot to the specified figure.
+        self.figure = figure
+        self.signal_plot = figure.add_subplot(1, channel_count, channel_position)
+        self.signal_specgram = self.signal_plot.specgram(
+            self.signal_window,
+            NFFT=1024,
+            Fs=128)
+        self.last_specgram = self.signal_specgram[-1]
+
+        # Setup the subscriber.
+        self.received = 0
+        self.signal_subscriber = rospy.Subscriber(
+            self.channel,
+            UInt32,
+            self.handle_message)
+        print("Listening to ros topic: %s" % self.channel)
+
+        # self.run()
+
+        # gobject.timeout_add(100, self.draw_specgram)
+        # gobject.idle_add(self.draw_specgram)
+
+    def run(self):
+        pyplot.show()
+
+    def handle_message(self, data):
+        print("Starting to receive...")
+        # with self.signal_lock:
+        # Shift the window over 1.
+        self.received += 1
+        self.signal_window = self.signal_window[1:]
+
+        # Add new data to the window.
+        self.signal_window = numpy.append(self.signal_window, data.data)
+
+        # print("\rReceived: %d" % self.received, end='')
+        print("Received: %d" % self.received)
+
+    def draw_specgram(self):
+        # if not rospy.is_shutdown():
+        # Draw the current window.
+        self.signal_plot.images.remove(self.last_specgram)
+
+        # with self.signal_lock:
+        self.signal_specgram = self.signal_plot.specgram(
+            self.signal_window,
+            NFFT=1024,
+            Fs=128)
+
+        self.last_specgram = self.signal_specgram[-1]
+        pylab.get_current_fig_manager().canvas.draw()
+
+        # self.figure.canvas.draw_idle()
+        # pyplot.draw()
+
+        # Print the signal vector to see what's going on with the plotting being messed up.
+        # print(self.signal_window)
+
+        print("Draw specgram...")
+
+
+def ros_start():
+    rospy.init_node('epoc_scalogram')
+    rospy.spin()
+
+
+def pyplot_start(*args):
+    pyplot.draw()
+
+
 if __name__ == '__main__':
     # Setup command line arguments for epoc_scalogram.
     parser = argparse.ArgumentParser(
@@ -142,41 +241,75 @@ if __name__ == '__main__':
     if args.target_type == 'bag':
         # Read the bag file.
         buffers = read_bag(args.target)
-        print "Read buffers."
+        print("Read buffers.")
 
         # Only display the signal channels.
         signals = [topic for topic in buffers if 'signal' in topic]
-        print "Read signals."
+        print("Read signals.")
 
         # Draw 3d plots.
         if args.display_type == '3d' or args.display_type == '3d_contour':
-            print "Drawing 3D plot."
+            print("Drawing 3D plot.")
             for topic in signals:
                 draw_3D_scalogram(buffers[topic], topic, args.display_type == '3d_contour')
 
         # Draw 2d plots.
         elif args.display_type == 'heatmap':
-            print "Drawing heatmap."
+            print("Drawing heatmap.")
             pylab.figure('EEG scalograms')
             pylab.title('EEG scalograms')
 
             if args.transform_type == 'fft':
                 for i, topic in enumerate(signals):
-                    pylab.subplot(1, len(signals), i)
+                    pylab.subplot(len(signals), 1, i)
                     draw_specgram(buffers[topic], topic)
             elif args.transform_type == 'morlet':
                 for i, topic in enumerate(signals):
                     pylab.subplot(len(signals), 1, i)
                     draw_scalogram(buffers[topic], topic)
             else:
-                print "Unsupported 'transform-type': %s" % args.transform_type
+                print("Unsupported 'transform-type': %s" % args.transform_type)
 
         # Display everything.
         pyplot.show()
 
     elif args.target_type == 'ros_topic':
+        # pyplot.ion()
+        waterfall_figure = pylab.figure('EEG waterfall plot')
+
         # Open up listeners
-        print "Listening to ros topics."
-        pass
+        grapher = EPOCWaterfallGrapher(
+            waterfall_figure,
+            args.target,
+            2048,
+            1,
+            1)
+        grapher.start()
+        rospy.init_node('epoc_scalogram')
+        rospy.spin()
+
+        # def animate(i):
+        #     grapher.draw_specgram()
+        # animation.FuncAnimation(waterfall_figure, animate, 100, repeat=False)
+        # pyplot.show()
+
+        # thread = threading.Thread(target=ros_start)
+        # thread.start()
+
+        # gobject.idle_add(ros_idle)
+        # pyplot.show()
+        # thread = threading.Thread(target=pyplot.show)
+        # thread.start()
+
+        # ros_start()
+        # gobject.idle_add(pyplot_start)
+
+        # pyplot.show()
+
+        # rospy.init_node('epoc_scalogram')
+        # rospy.spin()
+        # while not rospy.is_shutdown():
+        #     pyplot.draw()
+
     else:
-        print "Unrecognized target-type: %s" % args.target_type
+        print("Unrecognized target-type: %s" % args.target_type)
